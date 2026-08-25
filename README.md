@@ -84,6 +84,39 @@ cdt list_console_messages --types '["error"]'
 cdt close_page 1                          # positional pageId
 ```
 
+## Browser setup for auto-detect
+
+`cdt` auto-detects a Chrome/Chromium/Brave browser that is already
+listening on `127.0.0.1:9222` (the standard DevTools Protocol port) and
+automates your real tabs. To enable this, launch your browser with the
+`--remote-debugging-port` flag:
+
+```bash
+# Brave
+brave --remote-debugging-port=9222 &
+
+# Google Chrome
+google-chrome --remote-debugging-port=9222 &
+
+# Chromium
+chromium --remote-debugging-port=9222 &
+
+# macOS (different binary path)
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    --remote-debugging-port=9222 &
+```
+
+If nothing is listening on `:9222`, `cdt` falls back to launching its
+own ephemeral headless Chrome (`--isolated`) — useful for CI or
+sandboxed environments. See `references/11-browsers-and-ports.md` for
+trade-offs.
+
+**Security note:** `--remote-debugging-port=9222` exposes **full** read
+and write access to every open tab to **any** process on your machine
+that can connect to `127.0.0.1`. Only enable this on a trusted machine
+where you control which processes run. Do not bind to a public
+interface.
+
 ## Privacy and security
 
 The wrapper never enables Google telemetry or CrUX performance data:

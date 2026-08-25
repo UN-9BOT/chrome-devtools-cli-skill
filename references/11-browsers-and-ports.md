@@ -17,6 +17,35 @@ cdt list_pages                # foreground command (exits after request)
 The daemon persists across `cdt` calls — its tab list, console buffer,
 and network log all accumulate. Restart with `cdt stop` to reset.
 
+## How to listen on :9222
+
+`cdt` auto-detects a browser on `127.0.0.1:9222` only if such a browser
+exists. To make your browser listen, launch it with the
+`--remote-debugging-port=9222` flag:
+
+```bash
+# Linux
+brave --remote-debugging-port=9222 &
+google-chrome --remote-debugging-port=9222 &
+chromium --remote-debugging-port=9222 &
+
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    --remote-debugging-port=9222 &
+"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
+    --remote-debugging-port=9222 &
+```
+
+If you launch a browser **without** this flag, it won't be reachable via
+DevTools Protocol — `cdt` will fall back to `--isolated` and launch its
+own Chrome. Verify with `cdt --doctor` (the "DevTools Protocol endpoints"
+section shows what's currently listening).
+
+**Security:** the DevTools Protocol on `127.0.0.1` exposes **full**
+read/write access to every open tab to any local process that can reach
+the port. Don't bind to a public interface; don't enable on shared
+hosts.
+
 ## Auto-detect: :9222 vs --isolated
 
 `cdt` decides which browser to connect to on every call (it may restart

@@ -33,6 +33,29 @@ The wrapper requires `chrome-devtools` on `PATH` (or in
 `~/.npm-global/bin/chrome-devtools`). It calls `chrome-devtools status`,
 `start`, `stop`, and forwards all other commands to the running daemon.
 
+## Browser setup (for auto-detect)
+
+`cdt` auto-detects a Chrome/Chromium/Brave already listening on
+`127.0.0.1:9222` (the DevTools Protocol port) and automates your real
+tabs. Enable this by launching your browser with
+`--remote-debugging-port=9222`:
+
+```bash
+brave --remote-debugging-port=9222 &                    # Brave
+google-chrome --remote-debugging-port=9222 &           # Google Chrome
+chromium --remote-debugging-port=9222 &                # Chromium
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    --remote-debugging-port=9222 &                      # macOS
+```
+
+If nothing is on `:9222`, `cdt` falls back to launching its own
+ephemeral headless Chrome (`--isolated`). See
+`references/11-browsers-and-ports.md` for the trade-offs.
+
+**Security:** `--remote-debugging-port=9222` exposes **full** read/write
+access to every open tab to any process that can reach `127.0.0.1`.
+Only enable on a trusted machine. Never bind to a public interface.
+
 ## Service model
 
 `cdt` is a thin shim over a **persistent daemon**:

@@ -168,9 +168,12 @@ cdt list_pages
 cdt stop
 ```
 
-Run the meta-skill-zettelkasten validators (optional):
+Run the
+[meta-skill-zettelkasten](https://github.com/UN-9BOT/meta-skill-zettelkasten)
+validators (optional — install the skill first if you don't have it):
 
 ```bash
+npx skills add UN-9BOT/meta-skill-zettelkasten --skill meta-skill-zettelkasten -y -g
 python3 ~/.agents/skills/meta-skill-zettelkasten/scripts/validate_skill.py .
 python3 ~/.agents/skills/meta-skill-zettelkasten/scripts/analyze_skill.py .
 ```

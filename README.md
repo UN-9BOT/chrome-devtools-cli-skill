@@ -36,6 +36,8 @@ git clone https://github.com/UN-9BOT/chrome-devtools-cli-skill.git \
 # 3. Symlink the wrapper into ~/.local/bin
 mkdir -p ~/.local/bin
 ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-iso    # always isolated
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-live   # always :9222
 
 # 4. Verify
 which cdt && cdt --doctor
@@ -129,11 +131,32 @@ The wrapper never enables Google telemetry or CrUX performance data:
 
 ## Customization
 
+### Per-invocation env vars
+
 | Env var | Effect |
 | --- | --- |
 | `CDT_BROWSER_URL=isolated` | Force ephemeral Chrome (no live browser) |
 | `CDT_BROWSER_URL=http://host:port` | Connect to a specific browser |
 | `CDT_START_FLAGS="--memoryDebugging=true --categoryPwa=true"` | Add server flags (memory, PWA, vision, screencast, etc.); daemon restarts with extras |
+
+### Persistent aliases (symlinks)
+
+The wrapper is busybox-style — symlink it under different names to get
+persistent modes without per-call env vars:
+
+```bash
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-iso    # always isolated
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-live   # always :9222
+```
+
+| Binary | Effect |
+| --- | --- |
+| `cdt` | auto-detect `:9222`, fall back to isolated |
+| `cdt-iso` | always isolated ephemeral Chrome |
+| `cdt-live` | always connect to `127.0.0.1:9222` |
+
+Use `cdt stop` to reset the daemon between modes.
 
 ## Project layout
 

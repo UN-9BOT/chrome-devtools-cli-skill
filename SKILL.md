@@ -24,6 +24,8 @@ npm i -g chrome-devtools-mcp
 # 2. Symlink the wrapper into ~/.local/bin (idempotent)
 mkdir -p ~/.local/bin
 ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-iso    # always isolated
+ln -sf ~/.agents/skills/chrome-devtools-cli/scripts/cdt ~/.local/bin/cdt-live   # always :9222
 
 # 3. Verify
 which cdt && cdt --doctor

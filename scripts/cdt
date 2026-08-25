@@ -8,6 +8,29 @@
 # - `cdt --doctor` shows the full browser-automation environment.
 # - `cdt stop` stops the daemon (use to free memory or switch modes).
 # - `cdt --help` shows this script's help (NOT chrome-devtools's).
+#
+# This script also supports busybox-style invocation names so callers
+# can opt into a mode without per-call env vars:
+#
+#   cdt         — auto-detect (default)
+#   cdt-iso     — always use isolated ephemeral Chrome (CDT_BROWSER_URL=isolated)
+#   cdt-live    — always connect to 127.0.0.1:9222 (CDT_BROWSER_URL=http://127.0.0.1:9222)
+#
+# Install by symlinking the same script under each name.
+
+# --- Busybox-style: detect invocation name and pre-set env ---
+# Use $0 (not the readlink-resolved path) so symlink aliases work.
+_invocation_name=${0##*/}
+case "$_invocation_name" in
+    cdt-iso|cdt_iso|cdt-isolated|cdt_isolated)
+        : "${CDT_BROWSER_URL:=isolated}"
+        export CDT_BROWSER_URL
+        ;;
+    cdt-live|cdt_live)
+        : "${CDT_BROWSER_URL:=http://127.0.0.1:9222}"
+        export CDT_BROWSER_URL
+        ;;
+esac
 
 # Resolve $0 to a physical path (POSIX-safe; tolerates readlink without -f)
 _script_path=$0
@@ -61,6 +84,14 @@ Usage:
   cdt status                Show daemon state (passthrough — never restarts)
   cdt --doctor              Show browser-automation environment
   cdt --help                This help
+
+Invocation aliases (symlink this script under each name):
+  cdt         auto-detect (default)
+  cdt-iso     always use isolated ephemeral Chrome (CDT_BROWSER_URL=isolated)
+  cdt-live    always connect to 127.0.0.1:9222 (CDT_BROWSER_URL=http://127.0.0.1:9222)
+
+Aliases set the env var before each call so you don't have to remember
+to set it on the command line. Run `cdt stop` to switch modes.
 
 Auto-detect (default):
   If 127.0.0.1:9222 is listening, cdt starts the daemon with
@@ -175,5 +206,22 @@ if [ "$needs_restart" = "1" ]; then
         sleep 0.2
     done
 fi
+
+# --- Friendly hint for common mistakes ---
+# take_screenshot / take_snapshot / performance_* / lighthouse_audit all use
+# --filePath / --outputDirPath as flags, NOT positional. Detect likely mistakes
+# so the agent doesn't waste a turn reading --help.
+case "$1" in
+    take_screenshot)
+        case "${2-}" in
+            /*|./*|../*|*.png|*.jpg|*.jpeg|*.webp)
+                printf 'cdt: take_screenshot expects a flag, not a path.\n' >&2
+                printf '      did you mean:  cdt take_screenshot --filePath %s\n' "$2" >&2
+                printf '      (see SKILL.md / references/06-screenshots-and-files.md)\n' >&2
+                exit 2
+                ;;
+        esac
+        ;;
+esac
 
 exec "$CD" "$@"

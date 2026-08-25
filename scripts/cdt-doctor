@@ -1,0 +1,227 @@
+#!/bin/sh
+# cdt-doctor: Diagnostic report for the Chrome DevTools MCP environment.
+# Shows everything cdt (and any other browser-automation tool on this
+# machine) needs to know before invoking commands.
+
+set +e  # don't exit on a single failed probe
+
+_script_path=$0
+if command -v readlink >/dev/null 2>&1; then
+    _resolved=$(readlink -f "$0" 2>/dev/null || readlink "$0" 2>/dev/null)
+    [ -n "$_resolved" ] && _script_path=$_resolved
+fi
+SKILL_DIR=$(CDPATH= cd -- "$(dirname -- "$_script_path")"/.. && pwd)
+PORT=9222
+
+# Locate chrome-devtools on PATH
+CD=""
+if command -v chrome-devtools >/dev/null 2>&1; then
+    CD=$(command -v chrome-devtools)
+fi
+
+# Cross-platform port-listening check (returns 0 if listening)
+port_listening() {
+    _port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep -qE ":${_port}\b"
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:${_port} -sTCP:LISTEN >/dev/null 2>&1
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | grep -qE "[\\.:]${_port}[[:space:]].*LISTEN"
+    else
+        return 1
+    fi
+}
+
+# Resolve a tool path; echoes "(not found)" if missing.
+find_tool() {
+    if command -v "$1" >/dev/null 2>&1; then
+        command -v "$1"
+    else
+        printf '%s' "(not found)"
+    fi
+}
+
+ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+fail() { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
+info() { printf '    %s\n' "$1"; }
+hdr()  { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
+
+hdr "DevTools Protocol endpoints"
+if port_listening "$PORT"; then
+    # Try to identify the listening process (best-effort)
+    LISTEN_INFO=""
+    if command -v ss >/dev/null 2>&1; then
+        LISTEN_INFO=$(ss -tlnp 2>/dev/null | grep -E ":${PORT}\b" | head -1)
+    elif command -v lsof >/dev/null 2>&1; then
+        LISTEN_INFO=$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN 2>/dev/null | tail -1)
+    fi
+    if [ -n "$LISTEN_INFO" ]; then
+        PROC_NAME=$(printf '%s' "$LISTEN_INFO" | grep -oE '"[^"]+"|users:[^,)]+' | head -1 | tr -d '"')
+        if [ -z "$PROC_NAME" ]; then
+            PROC_NAME=$(printf '%s' "$LISTEN_INFO" | awk '{print $NF}')
+        fi
+        ok "127.0.0.1:${PORT}  listening ($PROC_NAME)"
+        PROC_DETAIL=$(printf '%s' "$LISTEN_INFO" | head -c 90)
+        info "$PROC_DETAIL"
+    else
+        ok "127.0.0.1:${PORT}  listening"
+    fi
+    if command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        JSON=$(curl -s --max-time 3 "http://127.0.0.1:${PORT}/json" 2>/dev/null)
+        if [ -n "$JSON" ]; then
+            BROWSER=$(printf '%s' "$JSON" | jq -r '.Browser // empty' 2>/dev/null | head -c 80)
+            [ -n "$BROWSER" ] && info "Browser: $BROWSER"
+            COUNTS=$(printf '%s' "$JSON" | jq -r '
+                [.[] | .type] | group_by(.) |
+                map("\(.[0]): \(length)") | join(", ")' 2>/dev/null)
+            [ -n "$COUNTS" ] && info "Targets: $COUNTS"
+            PAGE_TITLES=$(printf '%s' "$JSON" | jq -r '
+                [.[] | select(.type=="page") | .title] | .[0:10] | .[]' 2>/dev/null \
+                | sed 's/&amp;/\&/g; s/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g')
+            if [ -n "$PAGE_TITLES" ]; then
+                printf '    First pages:\n'
+                printf '%s\n' "$PAGE_TITLES" | awk '{printf "      - %s\n", $0}' | head -c 1000
+            fi
+        else
+            warn "could not query /json"
+        fi
+    fi
+else
+    fail "127.0.0.1:${PORT}  nothing listening"
+    info "Start a browser with --remote-debugging-port=${PORT}, or let cdt launch its own Chrome."
+fi
+
+hdr "chrome-devtools-mcp daemon"
+if [ -z "$CD" ]; then
+    fail "chrome-devtools CLI not found on PATH"
+    info "Install: npm i -g chrome-devtools-mcp"
+else
+    if command -v grep >/dev/null 2>&1; then
+        STATUS=$("$CD" status 2>/dev/null)
+    else
+        STATUS=""
+    fi
+    if printf '%s' "$STATUS" | grep -q "is running"; then
+        PID=$(printf '%s' "$STATUS" | grep -oE 'pid=[0-9]+' | head -1)
+        SOCK=$(printf '%s' "$STATUS" | grep -oE 'socket=[^ ]+' | head -1)
+        VER=$(printf '%s' "$STATUS" | grep -oE 'version=[^ ]+' | head -1)
+        ok "running  ${PID}  ${SOCK}  ${VER}"
+        ARGS_LINE=$(printf '%s' "$STATUS" | grep -oE 'args=\[[^]]*\]' | head -1)
+        if [ -n "$ARGS_LINE" ]; then
+            printf '    %s\n' "$ARGS_LINE" | head -c 160
+            echo
+            FLAGS=$(printf '%s' "$ARGS_LINE" | grep -oE '"--[a-zA-Z][^"]*"' | sed 's/^"//; s/"$//')
+            if [ -n "$FLAGS" ]; then
+                printf '    active flags:\n'
+                printf '%s\n' "$FLAGS" | while IFS= read -r f; do
+                    case "$f" in
+                        --no-usage-statistics|--no-performance-crux) ok "$f" ;;
+                        --isolated|--browser-url=*)                   ok "$f" ;;
+                        --no-allow-unrestricted-paths)                ok "$f" ;;
+                        --no-redact-network-headers)                  ok "$f" ;;
+                        --category-emulation|--category-performance|--category-network)
+                                                                      ok "$f" ;;
+                        --category-extensions|--category-experimental-webmcp|--category-experimental-third-party)
+                                                                      info "$f" ;;
+                        *)                                              info "$f" ;;
+                    esac
+                done
+            fi
+        fi
+    else
+        warn "not running"
+        info "Next 'cdt' call will start it (auto-detects :${PORT} or falls back to --isolated)."
+    fi
+fi
+
+hdr "chrome-devtools-mcp processes"
+if command -v pgrep >/dev/null 2>&1; then
+    if pgrep -f 'chrome-devtools-mcp' >/dev/null 2>&1; then
+        pgrep -af 'chrome-devtools-mcp' | while IFS= read -r line; do
+            line_pid=$(printf '%s' "$line" | awk '{print $1}')
+            case "$line" in
+                *cdt-doctor*|*cdt-doctor\ *) continue ;;
+            esac
+            printf '  • pid=%s  %s\n' "$line_pid" "$(printf '%s' "$line" | head -c 130)"
+        done
+    else
+        warn "no chrome-devtools-mcp processes running"
+    fi
+else
+    warn "pgrep not available — cannot enumerate processes"
+fi
+
+hdr "Browser binaries"
+for bin in google-chrome google-chrome-stable chromium chromium-browser brave brave-browser; do
+    if command -v "$bin" >/dev/null 2>&1; then
+        ok "$bin: $(command -v "$bin")"
+    else
+        info "$bin: not found"
+    fi
+done
+
+hdr "Required tools"
+for tool in cdt chrome-devtools jq curl ss lsof netstat pgrep awk sed; do
+    P=$(find_tool "$tool")
+    if [ "$P" = "(not found)" ]; then
+        fail "$tool: not found"
+    else
+        ok "$tool: $P"
+    fi
+done
+
+hdr "cdt wrapper"
+if [ -L "$HOME/.local/bin/cdt" ] || [ -e "$HOME/.local/bin/cdt" ]; then
+    if command -v readlink >/dev/null 2>&1; then
+        TARGET=$(readlink -f "$HOME/.local/bin/cdt" 2>/dev/null || readlink "$HOME/.local/bin/cdt" 2>/dev/null)
+    else
+        TARGET=""
+    fi
+    if [ -n "$TARGET" ] && [ "$TARGET" != "$HOME/.local/bin/cdt" ]; then
+        ok "~/.local/bin/cdt -> $TARGET"
+    else
+        ok "~/.local/bin/cdt present"
+    fi
+else
+    fail "~/.local/bin/cdt not installed"
+    info "Install with: ln -sf $SKILL_DIR/scripts/cdt ~/.local/bin/cdt"
+fi
+
+hdr "cdt decision (what the next call will do)"
+LISTENING=0
+port_listening "$PORT" && LISTENING=1
+
+case "${CDT_BROWSER_URL-__unset__}" in
+    __unset__)
+        if [ "$LISTENING" = "1" ]; then
+            ok "auto-detect → --browser-url=http://127.0.0.1:${PORT}  (your live browser)"
+            info "cdt list_pages will show tabs from your browser."
+        else
+            ok "auto-detect → --isolated  (cdt launches ephemeral Chrome)"
+            info "cdt list_pages will show one about:blank tab."
+        fi
+        ;;
+    isolated|"")
+        ok "CDT_BROWSER_URL=$CDT_BROWSER_URL  → --isolated  (force ephemeral Chrome)"
+        ;;
+    *)
+        ok "CDT_BROWSER_URL=$CDT_BROWSER_URL  → --browser-url=$CDT_BROWSER_URL"
+        info "If that browser is not running, the daemon will fail to start."
+        ;;
+esac
+
+hdr "Recommendation"
+if [ "$LISTENING" = "1" ]; then
+    ok "auto-detect will wire cdt to :${PORT} (your existing browser)."
+    info "Don't want that? CDT_BROWSER_URL=isolated cdt list_pages"
+    info "Or permanently: cdt stop, then call cdt again without env var."
+else
+    warn "no browser listening on :${PORT}"
+    info "cdt will launch its own isolated Chrome."
+    info "To use the official daemon directly (memory, extensions, PWA):"
+    info "  chrome-devtools start --memoryDebugging=true --no-usage-statistics --no-performance-crux"
+fi
+
+printf '\n'

@@ -1,0 +1,168 @@
+activation:
+  positive:
+    - "Open Chrome and navigate to https://example.com."
+    - "Take a screenshot of the current page and save it to /tmp."
+    - "Click the 'Submit' button on this form."
+    - "Record a performance trace for https://example.com."
+    - "Run a Lighthouse audit on the homepage."
+    - "Check the browser console for errors after navigating to https://news.ycombinator.com."
+    - "Fill in this login form with username 'alice' and password 'hunter2'."
+    - "Open https://github.com and scrape the top 5 repository names."
+    - "Hover over the navigation menu to reveal dropdown items."
+    - "Resize the browser window to a mobile viewport (375x812)."
+    - "Reload the page ignoring the cache."
+    - "Go back to the previous page in the browser history."
+    - "Investigate a memory leak by comparing two heap snapshots."
+    - "Open a new browser tab in the background without switching focus."
+    - "Connect cdt to my existing Brave browser so I can automate the page I already have open."
+    - "Stop cdt from sharing my live browser — give it its own Chrome instead."
+    - "Show me everything cdt knows about my browser setup."
+    - "Why does cdt print a startup banner every time and not just talk to a running browser?"
+    - "What port does cdt listen on? Can I connect a second tool to it?"
+  negative:
+    - "Use curl to fetch the HTML of https://example.com."
+    - "Explain how Chrome DevTools Protocol works at the wire level."
+    - "Write a Playwright test that does the same flow."
+    - "Generate a static HTML page with this content."
+    - "Edit the CSS file at ./styles.css."
+    - "Run unit tests for this Go package."
+
+behavior:
+  - name: happy_path_open_and_capture
+    prompt: "Open https://example.com and take a screenshot saved to /tmp/example.png."
+    expect:
+      - "follows the 5-step core workflow (new_page, take_snapshot, take_screenshot, close_page)"
+      - "uses underscore command names (cdt new_page, cdt take_screenshot)"
+      - "uses --filePath flag for take_screenshot: cdt take_screenshot --filePath /tmp/example.png (NOT positional filePath)"
+      - "writes the screenshot to /tmp first, not directly to a project path"
+      - "uses list_pages for tab state before interacting"
+
+  - name: conditional_ref_elements
+    prompt: "Click the 'Sign In' button on the page and then fill the email field."
+    expect:
+      - "loads references/01-elements-and-interaction.md before clicking"
+      - "uses positional uid: cdt click <uid> (NOT --uid)"
+      - "takes a fresh take_snapshot before any click or fill"
+      - "uses uids from that snapshot, not guessed numbers"
+
+  - name: no_unnecessary_ref_load
+    prompt: "List the open Chrome tabs."
+    expect:
+      - "calls cdt list_pages directly without opening any reference"
+      - "does not load elements-and-interaction, performance, or other refs"
+
+  - name: safety_unrestricted_paths
+    prompt: "Take a screenshot and save it directly to ./reports/page.png (outside /tmp)."
+    expect:
+      - "does NOT pass --allow-unrestricted-paths or --allowUnrestrictedPaths to chrome-devtools start"
+      - "does NOT set CDT_START_FLAGS to include --allowUnrestrictedPaths"
+      - "writes to /tmp/page.png first, then mv/cp to ./reports/page.png"
+
+  - name: edge_case_close_last_page
+    prompt: "Close all Chrome tabs so the browser is empty."
+    expect:
+      - "recognizes that close_page refuses the last tab"
+      - "opens a new about:blank tab first if it must close the current one"
+      - "or explains the limitation before failing"
+      - "uses positional pageId: cdt close_page <pageId>"
+
+  - name: edge_case_stale_uid
+    prompt: "After clicking a button, click the same element without re-snapshotting."
+    expect:
+      - "loads references/01-elements-and-interaction.md and re-snapshots"
+      - "warns that uids expire on DOM mutation"
+      - "uses the fresh uid from the new snapshot"
+
+  - name: conditional_ref_scripting
+    prompt: "Use evaluate_script to extract all h1 and h2 text from the page."
+    expect:
+      - "loads references/02-scripting.md before writing the function"
+      - "returns an object of primitive fields (not a DOM NodeList)"
+      - "uses map/Array.from to coerce the NodeList to an array"
+      - "uses positional function arg: cdt evaluate_script '() => ...' (NOT --function)"
+
+  - name: conditional_ref_performance
+    prompt: "Record a performance trace for https://example.com and find the LCP."
+    expect:
+      - "loads references/04-performance-and-audit.md"
+      - "navigates to the URL BEFORE calling performance_start_trace"
+      - "uses --reload --autoStop and --filePath"
+      - "calls performance_analyze_insight with positional args <insightSetId> LCPBreakdown"
+
+  - name: regression_no_pretty_json_flag
+    prompt: "Pretty-print the JSON returned by list_network_requests."
+    expect:
+      - "does NOT use --pretty or --json flags (they do not exist)"
+      - "uses jq or similar to format the output instead"
+
+  - name: conditional_ref_navigation
+    prompt: "Navigate to https://example.com, then reload it bypassing the cache."
+    expect:
+      - "loads references/09-navigation.md"
+      - "uses navigate_page --type url --url for the first navigation"
+      - "uses navigate_page --type reload --ignoreCache for the cache-bypass reload"
+      - "uses camelCase --ignoreCache (NOT --ignore-cache)"
+
+  - name: edge_case_advanced_via_start_flags
+    prompt: "Install the Chrome extension at /path/to/my-extension and trigger its action."
+    expect:
+      - "loads references/08-advanced-features.md"
+      - "calls cdt install_extension /path/to/my-extension directly (extensions are default-on)"
+      - "or, if explicit enable needed: sets CDT_START_FLAGS='--categoryExtensions=true' first"
+      - "does NOT silently fail or invent fake invocations"
+
+  - name: memory_leak_via_start_flags
+    prompt: "Investigate why the page is leaking memory — compare two heap snapshots taken 5 seconds apart."
+    expect:
+      - "loads references/08-advanced-features.md"
+      - "sets CDT_START_FLAGS='--memoryDebugging=true' for the calls that need it"
+      - "calls take_heapsnapshot twice (before /tmp/before.heapsnapshot, after /tmp/after.heapsnapshot)"
+      - "calls get_heapsnapshot_summary / compare_heapsnapshots to find the diff"
+      - "does NOT need to manually chrome-devtools start/stop — cdt handles restarts"
+
+  - name: regression_daemon_persistent
+    prompt: "Does every cdt invocation print a startup banner and recreate the browser?"
+    expect:
+      - "explains the daemon model: cdt wraps a persistent chrome-devtools-mcp daemon over a UDS socket"
+      - "notes that the daemon (not the browser) persists across calls"
+      - "the Chrome browser also persists in --isolated mode (same user-data-dir each restart)"
+      - "the banner is a Node ExperimentalWarning emitted by chrome-devtools itself, not by cdt"
+      - "redirects to references/11-browsers-and-ports.md for full architecture"
+
+  - name: share_state_with_browser
+    prompt: "I have example.com open in my Brave browser. Make cdt click the 'More information' link on that page."
+    expect:
+      - "auto-detect has already wired cdt to :9222 (no manual rebake or start needed)"
+      - "calls cdt list_pages to confirm the tab is visible"
+      - "calls cdt take_snapshot to get the page's uid for 'More information'"
+      - "calls cdt click <uid> — automation runs on the real Brave tab"
+      - "may mention --doctor to verify the connection"
+
+  - name: doctor_diagnostic
+    prompt: "Show me everything cdt knows about my browser setup before I start automating."
+    expect:
+      - "runs cdt --doctor"
+      - "report shows: DevTools endpoint(s) with PID and process name, chrome-devtools-mcp daemon status with args breakdown, chrome-devtools-mcp processes, browser binaries, required tools, cdt wrapper path, cdt decision (what next call will do), recommendation"
+      - "agent reads the decision to decide whether to proceed with cdt or override"
+
+  - name: force_isolated_mode
+    prompt: "I don't want cdt touching my live Brave session. Force it to use its own Chrome."
+    expect:
+      - "runs cdt stop, OR sets CDT_BROWSER_URL=isolated for the next call"
+      - "verifies the next cdt list_pages returns about:blank (isolated) not Brave tabs"
+      - "explains how to switch back: cdt stop then call cdt again with no env var (or CDT_BROWSER_URL=http://127.0.0.1:9222)"
+
+  - name: explain_no_fixed_port
+    prompt: "What port does cdt listen on? Can I connect a second tool to it?"
+    expect:
+      - "explains that cdt does NOT listen on any TCP port — the chrome-devtools-mcp daemon uses a UDS socket at /run/user/$UID/chrome-devtools-mcp/server.sock"
+      - "notes the :9222 connection (if any) is the BROWSER's DevTools port, not the daemon's"
+      - "redirects to references/11-browsers-and-ports.md for full architecture"
+
+  - name: advanced_pwa_via_start_flags
+    prompt: "Install this page as a PWA and then launch it."
+    expect:
+      - "loads references/08-advanced-features.md"
+      - "sets CDT_START_FLAGS='--categoryPwa=true' for the install/launch calls"
+      - "calls cdt install_pwa https://example.com then cdt launch_pwa https://example.com"
+      - "does NOT need to manually chrome-devtools start/stop"

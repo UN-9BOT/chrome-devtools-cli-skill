@@ -1,0 +1,179 @@
+#!/bin/sh
+# cdt: Chrome DevTools MCP CLI wrapper.
+#
+# - Auto-detects an existing browser on 127.0.0.1:9222 and starts the
+#   official chrome-devtools daemon wired to it.
+# - Honors CDT_BROWSER_URL override ("isolated" / "URL" / unset).
+# - Honors CDT_START_FLAGS for memory/PWA/experimental categories.
+# - `cdt --doctor` shows the full browser-automation environment.
+# - `cdt stop` stops the daemon (use to free memory or switch modes).
+# - `cdt --help` shows this script's help (NOT chrome-devtools's).
+
+# Resolve $0 to a physical path (POSIX-safe; tolerates readlink without -f)
+_script_path=$0
+if command -v readlink >/dev/null 2>&1; then
+    _resolved=$(readlink -f "$0" 2>/dev/null || readlink "$0" 2>/dev/null)
+    [ -n "$_resolved" ] && _script_path=$_resolved
+fi
+SKILL_DIR=$(CDPATH= cd -- "$(dirname -- "$_script_path")"/.. && pwd)
+DOCTOR="$SKILL_DIR/scripts/cdt-doctor"
+
+# Locate chrome-devtools on PATH
+if command -v chrome-devtools >/dev/null 2>&1; then
+    CD=$(command -v chrome-devtools)
+else
+    printf 'cdt: chrome-devtools not found on PATH\n' >&2
+    printf '      install: npm i -g chrome-devtools-mcp\n' >&2
+    exit 127
+fi
+
+# Detect whether a TCP port is listening (Linux/macOS portable).
+# Returns 0 if listening, 1 otherwise.
+port_listening() {
+    _port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep -qE ":${_port}\b"
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:${_port} -sTCP:LISTEN >/dev/null 2>&1
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -an 2>/dev/null | grep -qE "[\\.:]${_port}[[:space:]].*LISTEN"
+    else
+        return 1
+    fi
+}
+
+PORT=9222
+SAFE_FLAGS="--no-usage-statistics --no-performance-crux"
+
+# --- Routing: --doctor / --help / stop / status (passthroughs) ---
+case "$1" in
+    --doctor|doctor) exec "$DOCTOR" ;;
+    stop)             exec "$CD" stop ;;
+    # status / version: passive reads, never trigger a daemon restart
+    status|--version|version) exec "$CD" "$@" ;;
+    --help|-h)
+        cat <<'EOF'
+cdt — Chrome DevTools MCP CLI wrapper (delegates to chrome-devtools).
+
+Usage:
+  cdt <command> [args]      Run a chrome-devtools command (via persistent daemon)
+  cdt stop                  Stop the daemon
+  cdt status                Show daemon state (passthrough — never restarts)
+  cdt --doctor              Show browser-automation environment
+  cdt --help                This help
+
+Auto-detect (default):
+  If 127.0.0.1:9222 is listening, cdt starts the daemon with
+  --browserUrl=http://127.0.0.1:9222. Otherwise cdt starts it with
+  --isolated (its own ephemeral Chrome). On every call, cdt checks
+  whether the running daemon's args match the desired target — if not,
+  it restarts.
+
+Override browser target (per-invocation; daemon may be restarted):
+  CDT_BROWSER_URL=isolated              cdt list_pages
+  CDT_BROWSER_URL=http://host:9333      cdt list_pages
+
+Add server flags (memory, PWA, vision, screencast, etc.):
+  CDT_START_FLAGS="--memoryDebugging=true"              cdt get_heapsnapshot_summary /tmp/snap.heapsnapshot
+  CDT_START_FLAGS="--categoryPwa=true"                  cdt launch_pwa https://example.com
+  CDT_START_FLAGS="--memoryDebugging=true --categoryPwa=true"  cdt get_heapsnapshot_summary /tmp/snap.heapsnapshot
+
+If the running daemon lacks a requested flag, cdt restarts with it added.
+Telemetry is always disabled (--no-usage-statistics --no-performance-crux).
+Path sandbox is always enabled (never --allow-unrestricted-paths).
+
+The daemon persists across calls — `cdt list_pages` keeps showing the
+same tabs, heapsnapshots loaded via `get_heapsnapshot_*` stay in memory.
+To free everything: `cdt stop`. To switch modes: `cdt stop`, then call
+`cdt` again with the desired env var.
+EOF
+        exit 0
+        ;;
+esac
+
+# --- Decide target ---
+detected_url=""
+if port_listening "$PORT"; then
+    detected_url="http://127.0.0.1:${PORT}"
+fi
+
+case "${CDT_BROWSER_URL-__unset__}" in
+    __unset__) target_mode="auto";       target_url="$detected_url" ;;
+    "")        target_mode="isolated";   target_url="" ;;
+    isolated)  target_mode="isolated";   target_url="" ;;
+    *)         target_mode="browserurl"; target_url="$CDT_BROWSER_URL" ;;
+esac
+
+# Extra server flags requested via env var (space-separated).
+# Examples:
+#   CDT_START_FLAGS="--memoryDebugging=true"
+#   CDT_START_FLAGS="--memoryDebugging=true --categoryPwa=true"
+# Wrapper always passes SAFE_FLAGS; never allows --allowUnrestrictedPaths.
+START_FLAGS="${CDT_START_FLAGS-}"
+
+# --- Check daemon status ---
+status_out=$("$CD" status 2>/dev/null)
+daemon_running=0
+if printf '%s' "$status_out" | grep -q "is running"; then
+    daemon_running=1
+fi
+
+needs_restart=0
+if [ "$daemon_running" = "0" ]; then
+    needs_restart=1
+else
+    # daemon up — check args match desired target
+    case "$target_mode" in
+        isolated)
+            # need --isolated AND no --browser-url= (otherwise connected to an existing browser)
+            printf '%s' "$status_out" | grep -qF '"--isolated"' || needs_restart=1
+            printf '%s' "$status_out" | grep -qF '"--browser-url=' && needs_restart=1
+            ;;
+        *)
+            # daemon serializes flag as --browser-url=... (kebab-case)
+            want_arg="--browser-url=${target_url}"
+            printf '%s' "$status_out" | grep -qF "\"${want_arg}\"" || needs_restart=1
+            ;;
+    esac
+    # every flag in START_FLAGS must be present in args=[...]
+    # daemon normalizes --camelCase → --kebab-case; boolean flags lose =true.
+    if [ "$needs_restart" = "0" ] && [ -n "$START_FLAGS" ]; then
+        for f in $START_FLAGS; do
+            f_name=$(printf '%s' "$f" | sed -E 's/=.*//')
+            f_kebab=$(printf '%s' "$f_name" | sed -E 's/([a-z])([A-Z])/\1-\2/g; s/([A-Z]+)([A-Z][a-z])/\1-\2/g' | tr '[:upper:]' '[:lower:]')
+            if ! printf '%s' "$status_out" | grep -qF "\"${f_kebab}\"" \
+               && ! printf '%s' "$status_out" | grep -qF "\"${f_name}\""; then
+                needs_restart=1
+                break
+            fi
+        done
+    fi
+fi
+
+# --- Start / restart if needed ---
+if [ "$needs_restart" = "1" ]; then
+    "$CD" stop >/dev/null 2>&1
+    i=0
+    while [ "$i" -lt 20 ]; do
+        s=$("$CD" status 2>/dev/null)
+        printf '%s' "$s" | grep -q "is running" || break
+        i=$((i+1))
+        sleep 0.2
+    done
+    case "$target_mode" in
+        isolated) start_args="--isolated" ;;
+        *)        start_args="--browserUrl=${target_url}" ;;
+    esac
+    # shellcheck disable=SC2086
+    "$CD" start $start_args $SAFE_FLAGS $START_FLAGS >/dev/null 2>&1
+    # wait for daemon to come up
+    i=0
+    while [ "$i" -lt 30 ]; do
+        s=$("$CD" status 2>/dev/null)
+        printf '%s' "$s" | grep -q "is running" && break
+        i=$((i+1))
+        sleep 0.2
+    done
+fi
+
+exec "$CD" "$@"
